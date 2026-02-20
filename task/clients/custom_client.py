@@ -8,7 +8,7 @@ from task.models.message import Message
 from task.models.role import Role
 
 
-class DialClient:
+class CustomDialClient(BaseClient):
     _endpoint: str
     _api_key: str
 
@@ -17,34 +17,85 @@ class DialClient:
         self._endpoint = DIAL_ENDPOINT + f"/openai/deployments/{deployment_name}/chat/completions"
 
     def get_completion(self, messages: list[Message]) -> Message:
-        #TODO:
-        # Take a look at README.md of how the request and regular response are looks like!
-        # 1. Create headers dict with api-key and Content-Type
-        # 2. Create request_data dictionary with:
-        #   - "messages": convert messages list to dict format using msg.to_dict() for each message
-        # 3. Make POST request using requests.post() with:
-        #   - URL: self._endpoint
-        #   - headers: headers from step 1
-        #   - json: request_data from step 2
-        # 4. Get content from response, print it and return message with assistant role and content
-        # 5. If status code != 200 then raise Exception with format: f"HTTP {response.status_code}: {response.text}"
-        raise NotImplementedError
+        headers = {
+            "api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
+        request_data = {
+            "messages": [message.to_dict() for message in messages],
+        }
+
+        response = requests.post(
+            self._endpoint,
+            headers=headers,
+            json=request_data,
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+        content = response.json()["choices"][0]["message"]["content"]
+        print(content)
+        return Message(Role.AI, content)
 
     async def stream_completion(self, messages: list[Message]) -> Message:
-        #TODO:
-        # Take a look at README.md of how the request and streamed response chunks are looks like!
-        # 1. Create headers dict with api-key and Content-Type
-        # 2. Create request_data dictionary with:
-        #    - "stream": True  (enable streaming)
-        #    - "messages": convert messages list to dict format using msg.to_dict() for each message
-        # 3. Create empty list called 'contents' to store content snippets
-        # 4. Create aiohttp.ClientSession() using 'async with' context manager
-        # 5. Inside session, make POST request using session.post() with:
-        #    - URL: self._endpoint
-        #    - json: request_data from step 2
-        #    - headers: headers from step 1
-        #    - Use 'async with' context manager for response
-        # 6. Get content from chunks (don't forget that chunk start with `data: `, final chunk is `data: [DONE]`), print
-        #    chunks, collect them and return as assistant message
-        raise NotImplementedError
+        headers = {
+            "api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
+        request_data = {
+            "stream": True,
+            "messages": [message.to_dict() for message in messages],
+        }
+        contents: list[str] = []
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self._endpoint,
+                json=request_data,
+                headers=headers,
+            ) as response:
+                if response.status != 200:
+                    response_text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {response_text}")
+
+                done = False
+                while not done:
+                    raw_chunk = await response.content.readline()
+                    if not raw_chunk:
+                        break
+
+                    chunk = raw_chunk.decode("utf-8").strip()
+                    if not chunk:
+                        continue
+
+                    print(chunk)
+                    if chunk == "data: [DONE]":
+                        done = True
+                        continue
+
+                    content_snippet = self._get_content_snippet(chunk)
+                    if content_snippet:
+                        contents.append(content_snippet)
+
+        return Message(Role.AI, "".join(contents))
+
+    @staticmethod
+    def _get_content_snippet(chunk: str) -> str:
+        data_prefix = "data: "
+        if not chunk.startswith(data_prefix):
+            return ""
+
+        payload = chunk[len(data_prefix):]
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return ""
+
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+
+        delta = choices[0].get("delta", {})
+        return delta.get("content", "") or ""
 

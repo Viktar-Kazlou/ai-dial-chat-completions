@@ -1,0 +1,6 @@
+version: '3'
+
+tasks:
+  up:
+    desc: Start the app
+    cmd: .venv/bin/python3 -m task.app
